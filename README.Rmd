@@ -1,0 +1,125 @@
+---
+output: github_document
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "Readme_files/"
+)
+```
+
+# DataSHIELD Use-case
+
+This repository contains a short use-case base on the three packages `ds.predict.base`, `ds.calibration`, and `ds.roc.glm`. The main intend is to have a short script which can be used for testing the functionality of these packages.
+
+The following contains the script for the use-case as well as the output.
+
+## DataSHIELD Setup
+
+Install all packages locally and also on the DataSHIELD test machine. Also fit a logistic regression, create a new project and upload the data sets:
+
+```{r}
+remotes::install_github("difuture-lmu/ds.predict.base")
+remotes::install_github("difuture-lmu/ds.calibration")
+remotes::install_github("difuture-lmu/ds.roc.glm")
+
+source("update-data.R")
+source("upload-data.R")
+source("create-log-reg.R")
+source("install-ds-packages.R")
+```
+
+## Log into DataSHIELD server
+
+```{r}
+library(DSI)
+library(DSOpal)
+library(dsBaseClient)
+
+library(ds.predict.base)
+library(ds.calibration)
+library(ds.roc.glm)
+
+builder = newDSLoginBuilder()
+
+surl     = "https://opal-demo.obiba.org/"
+username = "administrator"
+password = "password"
+
+datasets = c("KUM", "MRI", "UKA", "UKT")
+for (i in seq_along(datasets)) {
+  builder$append(
+    server   = paste0("ds", i),
+    url      = surl,
+    user     = username,
+    password = password,
+    table    = paste0("DIFUTURE-TEST.", datasets[i])
+  )
+}
+
+## Get data of the servers:
+conn = datashield.login(logins = builder$build(), assign = TRUE)
+datashield.symbols(conn)
+```
+
+## Push and predict
+
+```{r}
+## Load the pre-calculated logistic regression:
+load(here::here("data/mod.Rda"))
+
+## Push the model to the servers:
+pushObject(conn, obj = mod)
+datashield.symbols(conn)
+
+## Predict the model on the data sets located at the servers:
+predictModel(conn, mod, "pred", predict_fun = "predict(mod, newdata = D, type = 'response')")
+datashield.symbols(conn)
+```
+
+## Analyse calibration of the predictions
+
+```{r}
+dsBrierScore(conn, "D$binomial_1", "pred")
+cc = dsCalibrationCurve(conn, "D$binomial_1", "pred")
+plotCalibrationCurve(cc, size = 1.5)
+```
+
+## Evaluate the model using ROC analysis
+
+```{r}
+roc_glm = dsROCGLM(conn, "D$binomial_1", "pred")
+plot(roc_glm) + ggplot2::theme_minimal()
+```
+
+## Cross check on pooled data:
+
+```{r}
+## Check on pooled data:
+if (TRUE) {
+  library(mlr)
+  load(here::here("data/dat_full.Rda"))
+
+  task = makeClassifTask(data = dat, target = "binomial_1")
+  lrn  = makeLearner("classif.logreg", predict.type = "prob")
+  mod  = train(lrn, task)
+  pred = predict(mod, task = task)
+
+  measureAUC(pred$data$prob.1, pred$data$truth, negative = 0, positive = 1)
+  measureBrier(pred$data$prob.1, pred$data$truth, negative = 0, positive = 1)
+
+  df = generateThreshVsPerfData(pred, measure = list(fpr, tpr))
+
+  gg_roc_glm = plot(roc_glm)
+  gg_roc_glm +
+    ggplot2::geom_line(data = df$data, ggplot2::aes(x = fpr, y = tpr), color = "dark red", alpha = 0.6) +
+    ggplot2::theme_minimal()
+}
+
+datashield.logout(conn)
+```
+
