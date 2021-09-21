@@ -27,10 +27,11 @@ remotes::install_github("difuture-lmu/ds.predict.base")
 remotes::install_github("difuture-lmu/ds.calibration")
 remotes::install_github("difuture-lmu/ds.roc.glm")
 
-source("update-data.R")
-source("upload-data.R")
-source("create-log-reg.R")
-source("install-ds-packages.R")
+source(here::here("R/update-data.R"))
+source(here::here("R/upload-data.R"))
+source(here::here("R/create-log-reg.R"))
+source(here::here("R/install-ds-packages.R"))
+source(here::here("R/helper.R"))
 ```
 
 ## Log into DataSHIELD server
@@ -84,7 +85,8 @@ datashield.symbols(conn)
 ## Analyse calibration of the predictions
 
 ```{r}
-dsBrierScore(conn, "D$binomial_1", "pred")
+brier = dsBrierScore(conn, "D$binomial_1", "pred")
+brier
 cc = dsCalibrationCurve(conn, "D$binomial_1", "pred")
 plotCalibrationCurve(cc, size = 1.5)
 ```
@@ -92,7 +94,7 @@ plotCalibrationCurve(cc, size = 1.5)
 ## Evaluate the model using ROC analysis
 
 ```{r}
-roc_glm = dsROCGLM(conn, "D$binomial_1", "pred")
+roc_glm = dsROCGLM(conn, "D$binomial_1", "pred", lag = 1, ntimes = 1)
 plot(roc_glm) + ggplot2::theme_minimal()
 ```
 
@@ -100,26 +102,36 @@ plot(roc_glm) + ggplot2::theme_minimal()
 
 ```{r}
 ## Check on pooled data:
-if (TRUE) {
-  library(mlr)
-  load(here::here("data/dat_full.Rda"))
+library(mlr)
+load(here::here("data/dat_full.Rda"))
 
-  task = makeClassifTask(data = dat, target = "binomial_1")
-  lrn  = makeLearner("classif.logreg", predict.type = "prob")
-  mod  = train(lrn, task)
-  pred = predict(mod, task = task)
+task = makeClassifTask(data = dat, target = "binomial_1")
+lrn  = makeLearner("classif.logreg", predict.type = "prob")
+mod  = train(lrn, task)
+pred = predict(mod, task = task)
 
-  measureAUC(pred$data$prob.1, pred$data$truth, negative = 0, positive = 1)
-  measureBrier(pred$data$prob.1, pred$data$truth, negative = 0, positive = 1)
+auc_pooled   = measureAUC(pred$data$prob.1, pred$data$truth, negative = 0, positive = 1)
+brier_pooled = measureBrier(pred$data$prob.1, pred$data$truth, negative = 0, positive = 1)
 
-  df = generateThreshVsPerfData(pred, measure = list(fpr, tpr))
+df = generateThreshVsPerfData(pred, measure = list(fpr, tpr))
 
-  gg_roc_glm = plot(roc_glm)
-  gg_roc_glm +
-    ggplot2::geom_line(data = df$data, ggplot2::aes(x = fpr, y = tpr), color = "dark red", alpha = 0.6) +
-    ggplot2::theme_minimal()
-}
+gg_roc_glm = plot(roc_glm)
+gg_roc_glm +
+  ggplot2::geom_line(data = df$data, ggplot2::aes(x = fpr, y = tpr), color = "dark red", alpha = 0.6) +
+  ggplot2::theme_minimal()
 
-datashield.logout(conn)
+var_auc = deLongVar(pred$data$prob.1, pred$data$truth)
+ci = logitToAUC(pepeCI(toLogit(auc_pooled), 0.05, var_auc))
+
+cross_check = data.frame(
+  "Distributed Data" = c(brier, roc_glm$auc, roc_glm$ci[1], roc_glm$ci[2]),
+  "Pooled Data" = c(brier_pooled, auc_pooled, ci[1], ci[2]))
+rownames(cross_check) = c("Brier Score", "AUC", "CI(0.95) (lower)", "CI(0.95) (upper)")
+knitr::kable(cross_check)
 ```
 
+## Log out from DataSHIELD servers
+
+```{r}
+datashield.logout(conn)
+```
