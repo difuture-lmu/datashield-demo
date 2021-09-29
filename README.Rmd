@@ -103,6 +103,8 @@ plot(roc_glm) + ggplot2::theme_minimal()
 ```{r}
 ## Check on pooled data:
 library(mlr)
+library(ggplot2)
+
 load(here::here("data/dat_full.Rda"))
 
 task = makeClassifTask(data = dat, target = "binomial_1")
@@ -112,6 +114,22 @@ pred = predict(mod, task = task)
 
 auc_pooled   = measureAUC(pred$data$prob.1, pred$data$truth, negative = 0, positive = 1)
 brier_pooled = measureBrier(pred$data$prob.1, pred$data$truth, negative = 0, positive = 1)
+
+cal = generateCalibrationData(pred, breaks = c(cc$aggregated$lower, tail(cc$aggregated$upper, n = 1)))$proportion %>%
+  dplyr::arrange(bin)
+cal$truth = cc$aggregated$truth
+cal$prob  = cc$aggregated$prob
+
+ggplot(cal) +
+  geom_abline(slope = 1, intercept = 0, color = "dark red", linetype = "dashed") +
+  geom_line(aes(x = prob, y = truth, color = "Distributed"), size = 1.2) +
+  geom_line(aes(x = Proportion, y = truth, color = "Pooled"), size = 1.2) +
+  ggsci::scale_color_aaas() +
+  xlab("Predicted") +
+  ylab("True frequency") +
+  labs(color = "") +
+  theme(legend.position = "bottom") +
+  theme_minimal()
 
 df = generateThreshVsPerfData(pred, measure = list(fpr, tpr))
 
